@@ -426,22 +426,31 @@ if mode == "1D Parameter Scanning":
         
         if run_scan:
             with st.spinner("Scanning parameter space..."):
+                # CRITICAL: Capture all session_state values BEFORE threading
+                # ThreadPoolExecutor workers cannot access st.session_state
+                captured_p = st.session_state.p
+                captured_subs = st.session_state.subs
+                captured_tol_inside = st.session_state.tol_inside
+                captured_cluster_eps = st.session_state.cluster_eps
+                captured_a = st.session_state.a
+                
                 xs = np.linspace(param_min, param_max, n_points)
                 ys = []
                 
                 def compute_multiplicity(param_val):
+                    # Use captured values, not st.session_state
                     p_test = LatticeParams(
-                        a=st.session_state.p.a if scan_param != "a" else param_val,
-                        b_ratio=st.session_state.p.b_ratio if scan_param != "b/a" else param_val,
-                        c_ratio=st.session_state.p.c_ratio if scan_param != "c/a" else param_val,
-                        alpha=st.session_state.p.alpha if scan_param != "α" else param_val,
-                        beta=st.session_state.p.beta if scan_param != "β" else param_val,
-                        gamma=st.session_state.p.gamma if scan_param != "γ" else param_val,
+                        a=captured_p.a if scan_param != "a" else param_val,
+                        b_ratio=captured_p.b_ratio if scan_param != "b/a" else param_val,
+                        c_ratio=captured_p.c_ratio if scan_param != "c/a" else param_val,
+                        alpha=captured_p.alpha if scan_param != "α" else param_val,
+                        beta=captured_p.beta if scan_param != "β" else param_val,
+                        gamma=captured_p.gamma if scan_param != "γ" else param_val,
                     )
                     m, _, _ = max_multiplicity_for_scale(
-                        st.session_state.subs, p_test, 1, 0.35,
-                        k_samples=4, tol_inside=st.session_state.tol_inside,
-                        cluster_eps=st.session_state.cluster_eps * st.session_state.a
+                        captured_subs, p_test, 1, 0.35,
+                        k_samples=4, tol_inside=captured_tol_inside,
+                        cluster_eps=captured_cluster_eps * captured_a
                     )
                     return float(m)
                 
