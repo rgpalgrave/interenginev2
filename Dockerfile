@@ -40,24 +40,7 @@ RUN echo "=== Files in container ===" && \
 RUN mkdir -p ~/.streamlit
 
 # Create Streamlit config file for Cloud Run
-RUN cat > ~/.streamlit/config.toml << 'STREAMLIT_CONFIG'
-[general]
-headless = true
-
-[server]
-port = 8080
-enableCORS = false
-enableXsrfProtection = false
-
-[logger]
-level = "info"
-
-[theme]
-primaryColor = "#1f77b4"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f0f2f6"
-textColor = "#262730"
-STREAMLIT_CONFIG
+RUN printf '[general]\nheadless = true\n\n[server]\nport = 8080\nenableCORS = false\nenableXsrfProtection = false\n\n[logger]\nlevel = "info"\n\n[theme]\nprimaryColor = "#1f77b4"\nbackgroundColor = "#ffffff"\nsecondaryBackgroundColor = "#f0f2f6"\ntextColor = "#262730"\n' > ~/.streamlit/config.toml
 
 # Expose port
 EXPOSE 8080
