@@ -4,7 +4,8 @@ FROM python:3.11-slim
 # Set environment variables
 ENV PYTHONUNBUFFERED=True \
     APP_HOME=/app \
-    PORT=8080
+    PORT=8080 \
+    PYTHONPATH=/app:$PYTHONPATH
 
 # Set working directory
 WORKDIR $APP_HOME
@@ -25,19 +26,38 @@ COPY integrated_streamlit_app.py .
 COPY interstitial_engine.py .
 COPY position_calculator.py .
 
+# Verify files were copied
+RUN echo "=== Files in container ===" && \
+    ls -la /app/*.py && \
+    echo "" && \
+    echo "=== Testing imports ===" && \
+    python3 -c "import sys; print('Python path:', sys.path[:3]); from interstitial_engine import LatticeParams; print('✓ interstitial_engine imported successfully')" && \
+    python3 -c "from position_calculator import generate_metal_positions; print('✓ position_calculator imported successfully')" && \
+    echo "=== Import test passed ===" || \
+    (echo "✗ Import failed - this will cause the app to fail"; exit 1)
+
 # Create directory for Streamlit config
 RUN mkdir -p ~/.streamlit
 
 # Create Streamlit config file for Cloud Run
-RUN echo "\
-[general]\n\
-headless = true\n\
-\n\
-[server]\n\
-port = 8080\n\
-enableCORS = false\n\
-enableXsrfProtection = false\n\
-" > ~/.streamlit/config.toml
+RUN cat > ~/.streamlit/config.toml << 'STREAMLIT_CONFIG'
+[general]
+headless = true
+
+[server]
+port = 8080
+enableCORS = false
+enableXsrfProtection = false
+
+[logger]
+level = "info"
+
+[theme]
+primaryColor = "#1f77b4"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#262730"
+STREAMLIT_CONFIG
 
 # Expose port
 EXPOSE 8080
