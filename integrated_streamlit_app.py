@@ -33,7 +33,7 @@ try:
     )
     from position_calculator import (
         generate_metal_positions,
-        generate_intersection_positions,
+        calculate_intersections_detailed,
         cart_to_frac,
         wrap_to_unit_cell,
         is_in_unit_cell,
