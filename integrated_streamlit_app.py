@@ -16,7 +16,11 @@ import sys
 from pathlib import Path
 
 # Import coordination calculator modules
-# Adjust paths if needed for your deployment
+# Add current directory to path for Cloud Run compatibility
+current_dir = Path(__file__).parent.absolute()
+if str(current_dir) not in sys.path:
+    sys.path.insert(0, str(current_dir))
+
 try:
     from interstitial_engine import (
         LatticeParams,
@@ -34,8 +38,11 @@ try:
         wrap_to_unit_cell,
         is_in_unit_cell,
     )
-except ImportError:
-    st.error("Could not import coordination calculator modules. Ensure interstitial_engine.py and position_calculator.py are in the Python path.")
+except ImportError as e:
+    st.error(f"❌ Could not import coordination calculator modules.")
+    st.error(f"Error: {str(e)}")
+    st.info(f"Debug info - Current directory: {current_dir}")
+    st.info(f"Files in directory: {list(current_dir.glob('*.py'))}")
     st.stop()
 
 # =====================================================================
