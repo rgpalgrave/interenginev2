@@ -1,0 +1,102 @@
+name: Deploy to Cloud Run
+
+# Trigger on push to main branch
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: us-central1
+  SERVICE_NAME: crystallography-suite
+  IMAGE_NAME: crystallography-suite
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      # Step 1: Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Google Cloud CLI authentication
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      # Step 3: Set up Google Cloud SDK
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          version: 'latest'
+
+      # Step 4: Configure Docker for Google Container Registry
+      - name: Configure Docker for GCR
+        run: |
+          gcloud auth configure-docker gcr.io
+
+      # Step 5: Build Docker image
+      - name: Build Docker image
+        run: |
+          docker build -t gcr.io/${{ env.PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t gcr.io/${{ env.PROJECT_ID }}/${{ env.IMAGE_NAME }}:latest .
+
+      # Step 6: Push image to Google Container Registry
+      - name: Push image to GCR
+        run: |
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.IMAGE_NAME }}:latest
+
+      # Step 7: Deploy to Cloud Run
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image=gcr.io/${{ env.PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --region=${{ env.REGION }} \
+            --platform=managed \
+            --allow-unauthenticated \
+            --memory=2Gi \
+            --cpu=2 \
+            --timeout=3600 \
+            --set-env-vars="STREAMLIT_SERVER_HEADLESS=true" \
+            --port=8080
+
+      # Step 8: Get Cloud Run URL
+      - name: Get Cloud Run URL
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region=${{ env.REGION }} \
+            --format='value(status.url)')
+          echo "Cloud Run URL: $SERVICE_URL"
+          echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_ENV
+
+      # Step 9: Create deployment comment on PR (if applicable)
+      - name: Comment on deployment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ Deployed to Cloud Run: ${{ env.SERVICE_URL }}'
+            })
+
+      # Step 10: Notify deployment
+      - name: Log deployment info
+        run: |
+          echo "Deployment successful!"
+          echo "Service: ${{ env.SERVICE_NAME }}"
+          echo "Region: ${{ env.REGION }}"
+          echo "Image: gcr.io/${{ env.PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"

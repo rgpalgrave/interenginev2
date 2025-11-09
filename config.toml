@@ -1,0 +1,52 @@
+[general]
+# Headless mode for Cloud Run (no browser needed)
+headless = true
+
+# App name
+title = "Crystallography Analysis Suite"
+
+# Menu visibility
+showSidebarNavigation = true
+
+# Development options
+development = false
+
+[client]
+# Toolbar visibility
+showErrorDetails = true
+toolbarMode = "viewer"
+
+[server]
+# Cloud Run uses port 8080
+port = 8080
+address = "0.0.0.0"
+
+# Disable CORS since running behind GCP load balancer
+enableCORS = false
+
+# Disable XSRF protection for Cloud Run
+enableXsrfProtection = false
+
+# Maximum upload size (100MB)
+maxUploadSize = 200
+
+# Session timeout
+maxMessageSize = 200
+
+# Running behind reverse proxy
+trustedOrigins = []
+
+[logger]
+level = "info"
+
+[browser]
+# Don't open browser in Cloud Run
+serverAddress = "0.0.0.0"
+
+[theme]
+# Optional: set theme
+primaryColor = "#1f77b4"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#262730"
+font = "sans serif"

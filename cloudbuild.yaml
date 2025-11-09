@@ -1,0 +1,63 @@
+# Cloud Build configuration for deploying to Cloud Run
+# This file enables automatic deployment from GitHub push events
+
+steps:
+  # Step 1: Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/crystallography-suite:$SHORT_SHA'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/crystallography-suite:latest'
+      - '.'
+    id: 'build-image'
+
+  # Step 2: Push the image to Google Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/crystallography-suite:$SHORT_SHA'
+    id: 'push-image'
+
+  # Step 3: Deploy to Cloud Run
+  - name: 'gcr.io/cloud-builders/gke-deploy'
+    args:
+      - 'run'
+      - '--filename=.'
+      - '--image=gcr.io/$PROJECT_ID/crystallography-suite:$SHORT_SHA'
+      - '--location=us-central1'
+      - '--output=/workspace/output'
+
+  # Step 4: Create Cloud Run service
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'crystallography-suite'
+      - '--image=gcr.io/$PROJECT_ID/crystallography-suite:$SHORT_SHA'
+      - '--region=us-central1'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--memory=2Gi'
+      - '--cpu=2'
+      - '--timeout=3600'
+      - '--set-env-vars=STREAMLIT_SERVER_HEADLESS=true'
+
+# Images to be pushed to the registry
+images:
+  - 'gcr.io/$PROJECT_ID/crystallography-suite:$SHORT_SHA'
+  - 'gcr.io/$PROJECT_ID/crystallography-suite:latest'
+
+# Build options
+options:
+  machineType: 'N1_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+
+# Set timeout
+timeout: '3600s'
+
+# Substitutions for custom values
+substitutions:
+  _REGION: 'us-central1'
+  _SERVICE_NAME: 'crystallography-suite'
