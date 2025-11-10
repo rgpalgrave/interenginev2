@@ -481,7 +481,7 @@ if st.session_state.calculation_result is not None:
         st.metric("Max Multiplicity", max_mult)
     
     # Tabs for different views
-    tab1, tab2, tab3, tab4 = st.tabs(["3D Structure", "Metal Atoms", "Intersections", "Export"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["3D Structure", "Metal Atoms", "Intersections", "Export", "Parameter Scan"])
     
     # =====================================================================
     # TAB 1: 3D Visualization
@@ -722,6 +722,114 @@ if st.session_state.calculation_result is not None:
         }
         
         st.json(config_summary)
+    
+    # =====================================================================
+    # TAB 5: Parameter Scan
+    # =====================================================================
+    
+    with tab5:
+        st.subheader("Parameter Scan")
+        st.markdown("*Scan a parameter and export results at each step*")
+        
+        col_scan1, col_scan2 = st.columns(2)
+        
+        with col_scan1:
+            scan_param = st.selectbox(
+                "Parameter to scan",
+                ["radius", "scale_s", "b_ratio", "c_ratio", "alpha", "beta", "gamma"],
+                help="Choose which parameter to vary"
+            )
+        
+        with col_scan2:
+            if scan_param == "radius":
+                sub_idx = st.number_input("Sublattice index", min_value=0, max_value=max(0, len(st.session_state.sublattices)-1), value=0)
+            else:
+                sub_idx = 0
+        
+        col_scan3, col_scan4, col_scan5 = st.columns(3)
+        
+        with col_scan3:
+            scan_min = st.number_input("Min value", value=0.3, step=0.1)
+        
+        with col_scan4:
+            scan_max = st.number_input("Max value", value=1.0, step=0.1)
+        
+        with col_scan5:
+            scan_step = st.number_input("Step size", value=0.1, step=0.05, min_value=0.01)
+        
+        if st.button("🔄 Run Parameter Scan", key="run_scan", use_container_width=True):
+            from position_calculator import scan_parameter
+            
+            with st.spinner(f"Scanning {scan_param}..."):
+                try:
+                    # Build sublattice objects
+                    sublattice_objs = []
+                    for sub_dict in st.session_state.sublattices:
+                        sub_obj = Sublattice(
+                            name=sub_dict["name"],
+                            bravais=st.session_state.lattice_params["bravais"],
+                            offset_frac=sub_dict["offset"],
+                            alpha_ratio=sub_dict["sphere_size"],
+                            visible=True
+                        )
+                        sublattice_objs.append(sub_obj)
+                    
+                    # Run scan
+                    scan_result = scan_parameter(
+                        sublattices=sublattice_objs,
+                        p=current_lattice,
+                        parameter_name=scan_param,
+                        param_min=scan_min,
+                        param_max=scan_max,
+                        param_step=scan_step,
+                        scale_s=scale_s,
+                        target_N=target_N,
+                        which_sublattice_idx=sub_idx,
+                        k_samples=k_samples,
+                        cluster_eps_frac=cluster_eps_frac
+                    )
+                    
+                    # Display results
+                    st.success(f"✅ Scan complete! {len(scan_result.structures)} points")
+                    
+                    # Summary table
+                    summary_data = {
+                        "Parameter Value": scan_result.parameter_values,
+                        "Metal Atoms": [len(s.metal_atoms.fractional) for s in scan_result.structures],
+                        "Intersections": [len(s.intersections.fractional) for s in scan_result.structures]
+                    }
+                    st.dataframe(summary_data, use_container_width=True, hide_index=True)
+                    
+                    # Export button
+                    @st.cache_data
+                    def get_export_data():
+                        import io, zipfile
+                        zip_buffer = io.BytesIO()
+                        with zipfile.ZipFile(zip_buffer, 'w') as zf:
+                            for i, (param_val, structure) in enumerate(zip(scan_result.parameter_values, scan_result.structures)):
+                                # Metal atoms
+                                metals_csv = format_metal_atoms_csv(structure)
+                                zf.writestr(f"{scan_param}_{param_val:.4f}_metals.csv", metals_csv)
+                                
+                                # Intersections
+                                intersections_csv = format_intersections_csv(structure)
+                                zf.writestr(f"{scan_param}_{param_val:.4f}_intersections.csv", intersections_csv)
+                        
+                        return zip_buffer.getvalue()
+                    
+                    export_data = get_export_data()
+                    st.download_button(
+                        label="📥 Download Scan Results (ZIP)",
+                        data=export_data,
+                        file_name=f"scan_{scan_param}_{scan_min:.2f}_{scan_max:.2f}.zip",
+                        mime="application/zip",
+                        use_container_width=True
+                    )
+                
+                except Exception as e:
+                    st.error(f"❌ Scan failed: {str(e)}")
+                    import traceback
+                    st.write(traceback.format_exc())
 
 st.divider()
 st.markdown("*Built with ❤️ for crystallographic analysis*")
