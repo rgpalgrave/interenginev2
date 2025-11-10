@@ -136,11 +136,16 @@ def centers_alphas_and_shifts(subs_key, p_key):
 # Pair list under PBC (reference→neighbors)
 # -----------------
 def periodic_candidate_pairs(centers: np.ndarray, shifts: np.ndarray, cutoff: float) -> List[Tuple[int,int,int]]:
+    """
+    Find all center pairs within cutoff distance under PBC.
+    Includes self-interactions with periodic images (gi == jj but s_idx != 13).
+    """
     if len(centers) == 0:
         return []
     pairs: List[Tuple[int,int,int]] = []
     cutoff2 = cutoff*cutoff
     n = len(centers)
+    
     for s_idx, S in enumerate(shifts):
         shifted = centers + S
         B = 512
@@ -151,8 +156,14 @@ def periodic_candidate_pairs(centers: np.ndarray, shifts: np.ndarray, cutoff: fl
             bi, bj = np.where(d2 < cutoff2)
             for ii, jj in zip(bi, bj):
                 gi = start + ii
-                if (s_idx > 13) or (s_idx == 13 and jj > gi):
+                # Central cell (s_idx == 13): only include gi < jj to avoid duplicates
+                if s_idx == 13:
+                    if gi < jj:
+                        pairs.append((gi, jj, s_idx))
+                # Non-central cells: include all pairs (allows self-interactions with periodic images)
+                else:
                     pairs.append((gi, jj, s_idx))
+    
     return pairs
 
 
