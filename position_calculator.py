@@ -223,7 +223,7 @@ def identify_contributing_atoms(
     
     Args:
         intersection_points: Cartesian coordinates of intersections (M, 3)
-        metal_atoms: Metal atom data
+        metal_atoms: Metal atom data (can be from supercell)
         shifts: Lattice translation vectors (27, 3)
         tolerance: Distance tolerance for "on sphere surface"
     
@@ -395,8 +395,8 @@ def calculate_intersections_detailed(
     key = _make_key(sublattices, p)
     centers, alphas, shifts, _ = build_geo(key)
     
-    # Generate metal atom data for the central cell
-    metal_atoms = generate_metal_positions(sublattices, p, scale_s, supercell=(1, 1, 1))
+    # Generate metal atom data for 3x3x3 supercell (to properly identify contributing atoms from neighboring cells)
+    metal_atoms = generate_metal_positions(sublattices, p, scale_s, supercell=(3, 3, 3))
     
     # Identify contributing atoms for each sample point
     multiplicities, contributing = identify_contributing_atoms(
@@ -479,14 +479,14 @@ def calculate_complete_structure(
         p: Lattice parameters
         scale_s: Current s value
         target_N: Optional target multiplicity for intersections
-        supercell_metals: Supercell size for metal atoms (for visualization)
+        supercell_metals: Supercell size for metal atoms (for visualization, unit cell only)
         k_samples: Sampling density for intersections
         unit_cell_only: Return only intersections in unit cell
     
     Returns:
         CompleteStructureData with all structural information
     """
-    # Generate metal positions
+    # Generate metal positions FOR VISUALIZATION (unit cell only)
     metal_atoms = generate_metal_positions(
         sublattices=sublattices,
         p=p,
@@ -494,7 +494,7 @@ def calculate_complete_structure(
         supercell=supercell_metals
     )
     
-    # Calculate intersections
+    # Calculate intersections (internally uses 3x3x3 supercell for neighbor detection)
     intersections = calculate_intersections_detailed(
         sublattices=sublattices,
         p=p,
