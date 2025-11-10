@@ -138,7 +138,9 @@ def centers_alphas_and_shifts(subs_key, p_key):
 def periodic_candidate_pairs(centers: np.ndarray, shifts: np.ndarray, cutoff: float) -> List[Tuple[int,int,int]]:
     """
     Find all center pairs within cutoff distance under PBC.
-    Includes self-interactions with periodic images (gi == jj but s_idx != 13).
+    Includes:
+    - Cross-sublattice pairs (different centers)
+    - Within-sublattice interactions with periodic images (same center, different cells)
     """
     if len(centers) == 0:
         return []
@@ -156,11 +158,14 @@ def periodic_candidate_pairs(centers: np.ndarray, shifts: np.ndarray, cutoff: fl
             bi, bj = np.where(d2 < cutoff2)
             for ii, jj in zip(bi, bj):
                 gi = start + ii
-                # Central cell (s_idx == 13): only include gi < jj to avoid duplicates
+                
+                # Central cell (s_idx == 13): avoid exact self-pairs (gi == jj)
+                # but allow gi < jj for cross-pairs
                 if s_idx == 13:
                     if gi < jj:
                         pairs.append((gi, jj, s_idx))
-                # Non-central cells: include all pairs (allows self-interactions with periodic images)
+                # Non-central cells: include all pairs
+                # This finds within-sublattice interactions across periodic images
                 else:
                     pairs.append((gi, jj, s_idx))
     
