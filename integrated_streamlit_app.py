@@ -746,7 +746,7 @@ if st.session_state.calculation_result is not None:
             else:
                 sub_idx = 0
         
-        col_scan3, col_scan4, col_scan5 = st.columns(3)
+        col_scan3, col_scan4, col_scan5, col_scan6 = st.columns(4)
         
         with col_scan3:
             scan_min = st.number_input("Min value", value=0.3, step=0.1)
@@ -756,6 +756,9 @@ if st.session_state.calculation_result is not None:
         
         with col_scan5:
             scan_step = st.number_input("Step size", value=0.1, step=0.05, min_value=0.01)
+        
+        with col_scan6:
+            min_mult = st.number_input("Min multiplicity", value=2, min_value=2, max_value=8, step=1, help="Only include intersections with multiplicity >= this value")
         
         if st.button("🔄 Run Parameter Scan", key="run_scan", use_container_width=True):
             from position_calculator import scan_parameter
@@ -783,7 +786,8 @@ if st.session_state.calculation_result is not None:
                         param_max=scan_max,
                         param_step=scan_step,
                         scale_s=scale_s,
-                        target_N=target_N,
+                        target_N=min_mult,
+                        min_multiplicity=min_mult,
                         which_sublattice_idx=sub_idx,
                         k_samples=k_samples,
                         cluster_eps_frac=cluster_eps_frac
@@ -800,26 +804,23 @@ if st.session_state.calculation_result is not None:
                     }
                     st.dataframe(summary_data, use_container_width=True, hide_index=True)
                     
-                    # Export button
+                    # Export as XYZ files in ZIP
                     @st.cache_data
                     def get_export_data():
                         import io, zipfile
                         zip_buffer = io.BytesIO()
                         with zipfile.ZipFile(zip_buffer, 'w') as zf:
-                            for i, (param_val, structure) in enumerate(zip(scan_result.parameter_values, scan_result.structures)):
-                                # Metal atoms
-                                metals_csv = format_metal_atoms_csv(structure)
-                                zf.writestr(f"{scan_param}_{param_val:.4f}_metals.csv", metals_csv)
-                                
-                                # Intersections
-                                intersections_csv = format_intersections_csv(structure)
-                                zf.writestr(f"{scan_param}_{param_val:.4f}_intersections.csv", intersections_csv)
+                            for param_val, structure in zip(scan_result.parameter_values, scan_result.structures):
+                                # XYZ format with metal atoms and intersections
+                                xyz_content = scan_result.to_xyz(param_val, structure)
+                                xyz_filename = f"{scan_param}_{param_val:.6f}.xyz"
+                                zf.writestr(xyz_filename, xyz_content)
                         
                         return zip_buffer.getvalue()
                     
                     export_data = get_export_data()
                     st.download_button(
-                        label="📥 Download Scan Results (ZIP)",
+                        label="📥 Download Scan Results (XYZ files in ZIP)",
                         data=export_data,
                         file_name=f"scan_{scan_param}_{scan_min:.2f}_{scan_max:.2f}.zip",
                         mime="application/zip",
