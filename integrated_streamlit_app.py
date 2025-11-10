@@ -302,7 +302,7 @@ with col_calc3:
         "Sampling density (k)",
         min_value=4,
         max_value=32,
-        value=16,
+        value=24,
         step=1,
         help="Number of samples per pair circle (higher = better but slower)"
     )
