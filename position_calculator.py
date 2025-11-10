@@ -54,6 +54,51 @@ def wrap_to_unit_cell(frac: np.ndarray) -> np.ndarray:
     return frac - np.floor(frac)
 
 
+def generate_periodic_images(
+    positions_frac: np.ndarray,
+    round_decimals: int = 3
+) -> np.ndarray:
+    """
+    Generate all periodic images of positions by translating by ±1 in each direction.
+    Keeps only those within [0, 1] unit cell.
+    
+    Args:
+        positions_frac: Fractional coordinates (N, 3)
+        round_decimals: Round to this many decimals to avoid floating point errors
+    
+    Returns:
+        All unique positions within [0, 1] unit cell, rounded and deduplicated
+    """
+    if len(positions_frac) == 0:
+        return np.empty((0, 3))
+    
+    # Generate all 27 translations (±1 in each direction)
+    all_images = []
+    for dx in [-1, 0, 1]:
+        for dy in [-1, 0, 1]:
+            for dz in [-1, 0, 1]:
+                translated = positions_frac + np.array([dx, dy, dz])
+                all_images.append(translated)
+    
+    all_images = np.vstack(all_images)
+    
+    # Round to avoid floating point errors
+    all_images = np.round(all_images, round_decimals)
+    
+    # Keep only those in [0, 1]
+    mask = np.all((all_images >= -1e-6) & (all_images <= 1.0 + 1e-6), axis=1)
+    in_unit_cell = all_images[mask]
+    
+    # Clip to [0, 1] to ensure no numerical errors
+    in_unit_cell = np.clip(in_unit_cell, 0.0, 1.0)
+    in_unit_cell = np.round(in_unit_cell, round_decimals)
+    
+    # Remove final duplicates after clipping
+    in_unit_cell = np.unique(in_unit_cell, axis=0)
+    
+    return in_unit_cell
+
+
 def is_in_unit_cell(frac: np.ndarray, tol: float = 1e-6) -> np.ndarray:
     """
     Check if fractional coordinates are within unit cell [0, 1).
@@ -460,6 +505,51 @@ class CompleteStructureData:
     lattice_vectors: Tuple[np.ndarray, np.ndarray, np.ndarray]
 
 
+@dataclass
+class ScanResult:
+    """Result from a parameter scan"""
+    parameter_name: str
+    parameter_values: np.ndarray  # Values scanned
+    structures: List[CompleteStructureData]  # Structure at each value
+    
+    def to_csv(self, filename: str):
+        """Export scan results to CSV files"""
+        import csv
+        
+        # One CSV per parameter value
+        for i, param_val in enumerate(self.parameter_values):
+            structure = self.structures[i]
+            
+            # Metal atoms file
+            metals_filename = f"{filename}_{self.parameter_name}_{param_val:.6f}_metals.csv"
+            with open(metals_filename, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['sublattice', 'frac_x', 'frac_y', 'frac_z', 'cart_x', 'cart_y', 'cart_z'])
+                for j in range(len(structure.metal_atoms.fractional)):
+                    frac = structure.metal_atoms.fractional[j]
+                    cart = structure.metal_atoms.cartesian[j]
+                    writer.writerow([
+                        structure.metal_atoms.sublattice_name[j],
+                        f"{frac[0]:.3f}", f"{frac[1]:.3f}", f"{frac[2]:.3f}",
+                        f"{cart[0]:.6f}", f"{cart[1]:.6f}", f"{cart[2]:.6f}"
+                    ])
+            
+            # Intersections file
+            int_filename = f"{filename}_{self.parameter_name}_{param_val:.6f}_intersections.csv"
+            with open(int_filename, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['multiplicity', 'frac_x', 'frac_y', 'frac_z', 'cart_x', 'cart_y', 'cart_z'])
+                for j in range(len(structure.intersections.fractional)):
+                    frac = structure.intersections.fractional[j]
+                    cart = structure.intersections.cartesian[j]
+                    mult = structure.intersections.multiplicity[j]
+                    writer.writerow([
+                        mult,
+                        f"{frac[0]:.3f}", f"{frac[1]:.3f}", f"{frac[2]:.3f}",
+                        f"{cart[0]:.6f}", f"{cart[1]:.6f}", f"{cart[2]:.6f}"
+                    ])
+
+
 def calculate_complete_structure(
     sublattices: List[Sublattice],
     p: LatticeParams,
@@ -502,8 +592,25 @@ def calculate_complete_structure(
         target_N=target_N,
         k_samples=k_samples,
         cluster_eps_frac=cluster_eps_frac,
-        unit_cell_only=unit_cell_only
+        unit_cell_only=False  # Get all first, then generate images
     )
+    
+    # Generate periodic images of intersections and keep only those in [0,1]
+    if len(intersections.fractional) > 0:
+        all_intersections_frac = generate_periodic_images(intersections.fractional, round_decimals=3)
+        # Convert back to Cartesian
+        a_vec, b_vec, c_vec = lattice_vectors(p)
+        all_intersections_cart = np.array([
+            frac_to_cart(frac, a_vec, b_vec, c_vec)
+            for frac in all_intersections_frac
+        ])
+        # Create new intersection data with all images
+        intersections = IntersectionData(
+            fractional=all_intersections_frac,
+            cartesian=all_intersections_cart,
+            multiplicity=np.full(len(all_intersections_frac), 2, dtype=int),  # All are N=2 for now
+            contributing_atoms=[[]] * len(all_intersections_frac)
+        )
     
     # Get lattice vectors
     vecs = lattice_vectors(p)
@@ -666,3 +773,92 @@ def format_xyz(data: CompleteStructureData, include_intersections: bool = True) 
             lines.append(f"X{mult}  {cart[0]:.6f}  {cart[1]:.6f}  {cart[2]:.6f}")
     
     return "\n".join(lines)
+
+
+# -----------------
+# Parameter scanning
+# -----------------
+
+def scan_parameter(
+    sublattices: List[Sublattice],
+    p: LatticeParams,
+    parameter_name: str,
+    param_min: float,
+    param_max: float,
+    param_step: float,
+    scale_s: float,
+    target_N: int = 2,
+    which_sublattice_idx: int = 0,
+    k_samples: int = 16,
+    cluster_eps_frac: float = 0.01
+) -> ScanResult:
+    """
+    Scan a parameter and collect structure results.
+    
+    Args:
+        sublattices: List of sublattice definitions
+        p: Base lattice parameters
+        parameter_name: Name of parameter to scan ('radius', 'b_ratio', 'c_ratio', 'alpha', 'beta', 'gamma', 'scale_s')
+        param_min, param_max: Range to scan
+        param_step: Step size
+        scale_s: Scale factor (if not scanning this)
+        target_N: Target multiplicity for intersections
+        which_sublattice_idx: Which sublattice to modify (for 'radius')
+        k_samples: Sampling density
+        cluster_eps_frac: Clustering tolerance
+    
+    Returns:
+        ScanResult with all calculated structures
+    """
+    import copy
+    
+    param_values = np.arange(param_min, param_max + param_step/2, param_step)
+    structures = []
+    
+    for param_val in param_values:
+        # Create modified parameters and sublattices
+        p_scan = copy.deepcopy(p)
+        subs_scan = copy.deepcopy(sublattices)
+        s_scan = scale_s
+        
+        if parameter_name == 'radius':
+            # Modify sphere size of specified sublattice
+            subs_scan[which_sublattice_idx].alpha_ratio = param_val
+        elif parameter_name == 'b_ratio':
+            p_scan.b_ratio = param_val
+        elif parameter_name == 'c_ratio':
+            p_scan.c_ratio = param_val
+        elif parameter_name == 'alpha':
+            p_scan.alpha = param_val
+        elif parameter_name == 'beta':
+            p_scan.beta = param_val
+        elif parameter_name == 'gamma':
+            p_scan.gamma = param_val
+        elif parameter_name == 'scale_s':
+            s_scan = param_val
+        else:
+            raise ValueError(f"Unknown parameter: {parameter_name}")
+        
+        # Calculate structure
+        try:
+            structure = calculate_complete_structure(
+                sublattices=subs_scan,
+                p=p_scan,
+                scale_s=s_scan,
+                target_N=target_N,
+                supercell_metals=(1, 1, 1),
+                k_samples=k_samples,
+                cluster_eps_frac=cluster_eps_frac,
+                unit_cell_only=True
+            )
+            structures.append(structure)
+        except Exception as e:
+            print(f"Error at {parameter_name}={param_val}: {e}")
+            # Return partial results
+            break
+    
+    return ScanResult(
+        parameter_name=parameter_name,
+        parameter_values=param_values[:len(structures)],
+        structures=structures
+    )
