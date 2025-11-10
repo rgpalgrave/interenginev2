@@ -222,63 +222,37 @@ def identify_contributing_atoms(
 ) -> Tuple[np.ndarray, List[List[int]]]:
     """
     Identify which metal atoms contribute to each intersection.
-    Deduplicates periodic images to count only unique atoms.
+    Counts periodic images of atoms without deduplication.
     
     Args:
         intersection_points: Cartesian coordinates of intersections (M, 3)
-        metal_atoms: Metal atom data (can be from supercell)
+        metal_atoms: Metal atom data (can be from supercell with periodic images)
         shifts: Lattice translation vectors (27, 3)
         tolerance: Distance tolerance for "on sphere surface"
-        lattice_vecs: Tuple of (a_vec, b_vec, c_vec) for wrapping to central cell
+        lattice_vecs: (Not used - kept for backward compatibility)
     
     Returns:
-        multiplicities: (M,) number of contributing atoms
+        multiplicities: (M,) number of contributing atoms (counting periodic images)
         contributing_lists: List of lists of atom indices
     """
     if len(intersection_points) == 0:
         return np.empty((0,), dtype=int), []
     
-    # Deduplicate metal atoms: map all to central cell (0 ≤ fractional < 1)
-    # This avoids counting the same atom 27 times in a 3x3x3 supercell
-    if lattice_vecs is not None:
-        a_vec, b_vec, c_vec = lattice_vecs
-        # Convert to fractional, wrap to [0,1), convert back to Cartesian
-        unique_atoms_cart = []
-        unique_atoms_radius = []
-        unique_atoms_sublattice = []
-        
-        seen = {}  # Map from (wrapped frac) -> index in unique arrays
-        
-        for i, cart_pos in enumerate(metal_atoms.cartesian):
-            frac = cart_to_frac(cart_pos, a_vec, b_vec, c_vec)
-            frac_wrapped = wrap_to_unit_cell(frac)
-            
-            # Create key for deduplication (round to avoid floating point issues)
-            key = tuple(np.round(frac_wrapped, 8))
-            
-            if key not in seen:
-                seen[key] = len(unique_atoms_cart)
-                unique_atoms_cart.append(frac_to_cart(frac_wrapped, a_vec, b_vec, c_vec))
-                unique_atoms_radius.append(metal_atoms.radius[i])
-                unique_atoms_sublattice.append(metal_atoms.sublattice_id[i])
-        
-        metal_atoms_dedup_cart = np.array(unique_atoms_cart)
-        metal_atoms_dedup_radius = np.array(unique_atoms_radius)
-    else:
-        # Fallback: use all atoms as-is
-        metal_atoms_dedup_cart = metal_atoms.cartesian
-        metal_atoms_dedup_radius = metal_atoms.radius
+    # Use the metal atoms as-is (don't deduplicate)
+    # The supercell contains all periodic images we need
+    metal_atoms_cart = metal_atoms.cartesian
+    metal_atoms_radius = metal_atoms.radius
     
     # Compute distances
     distances, _ = compute_periodic_distances(
         intersection_points,
-        metal_atoms_dedup_cart,
+        metal_atoms_cart,
         shifts
     )
     
     # Check which atoms are within tolerance of their sphere radius
     # distances[i, j] should be ≈ metal_atoms.radius[j]
-    on_surface = np.abs(distances - metal_atoms_dedup_radius[None, :]) < tolerance
+    on_surface = np.abs(distances - metal_atoms_radius[None, :]) < tolerance
     
     multiplicities = np.sum(on_surface, axis=1)
     contributing_lists = []
@@ -406,7 +380,8 @@ def calculate_intersections_detailed(
         IntersectionData with all intersection information
     """
     # Use existing engine to get raw intersection samples
-    max_mult, sample_positions, sample_counts = max_multiplicity_for_scale(
+    # The engine returns: max_multiplicity, sample_positions (Cartesian), sample_multiplicities
+    max_mult, sample_positions, sample_multiplicities = max_multiplicity_for_scale(
         sublattices=sublattices,
         p=p,
         repeat_ignored=1,
@@ -425,32 +400,18 @@ def calculate_intersections_detailed(
             contributing_atoms=[]
         )
     
-    # Get lattice vectors and geometry
+    # Get lattice vectors
     a_vec, b_vec, c_vec = lattice_vectors(p)
-    key = _make_key(sublattices, p)
-    centers, alphas, shifts, _ = build_geo(key)
-    
-    # Generate metal atom data for 3x3x3 supercell (to properly identify contributing atoms from neighboring cells)
-    metal_atoms = generate_metal_positions(sublattices, p, scale_s, supercell=(3, 3, 3))
-    
-    # Identify contributing atoms for each sample point
-    # Pass lattice vectors so the function can deduplicate periodic images
-    multiplicities, contributing = identify_contributing_atoms(
-        sample_positions,
-        metal_atoms,
-        shifts,
-        tolerance=tol_inside * 2,  # Slightly looser for identification
-        lattice_vecs=(a_vec, b_vec, c_vec)
-    )
     
     # Convert to fractional coordinates
     frac_positions = cart_to_frac(sample_positions, a_vec, b_vec, c_vec)
     
     # Cluster in fractional space with PBC
+    # Note: sample_multiplicities already come from the engine, just use them directly
     unique_frac, unique_mult, unique_contrib = cluster_intersections_pbc(
         frac_positions,
-        multiplicities,
-        contributing,
+        sample_multiplicities,
+        [[]] * len(sample_positions),  # We don't have contributor info, but cluster_eps doesn't need it
         eps_frac=cluster_eps_frac
     )
     
