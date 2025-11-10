@@ -181,7 +181,10 @@ def pair_circle_samples(c1: np.ndarray, r1: float, c2: np.ndarray, r2: float, k:
     if d2 <= 1e-24:
         return np.empty((0,3))
     d = sqrt(d2)
-    if not (abs(r1 - r2) < d < (r1 + r2)):
+    # Allow tangent spheres (d ≈ r1+r2) with small tolerance for numerical precision
+    # Condition: |r1-r2| ≤ d ≤ r1+r2
+    tol = 1e-10
+    if not (abs(r1 - r2) - tol <= d <= (r1 + r2) + tol):
         return np.empty((0,3))
     n = v / d
     t = (r1*r1 - r2*r2 + d*d) / (2*d*d)
@@ -197,9 +200,13 @@ def pair_circle_samples(c1: np.ndarray, r1: float, c2: np.ndarray, r2: float, k:
     w = np.cross(n,u)
     off = center - c1
     h2 = r1*r1 - float(np.dot(off,off))
-    if h2 <= 0.0:
+    # For tangent spheres, h2 ≈ 0, so allow small negative due to numerical errors
+    if h2 < -1e-10:
         return np.empty((0,3))
-    h = sqrt(h2)
+    h = sqrt(max(0.0, h2))
+    # If h ≈ 0 (tangent), return single point
+    if h < 1e-12:
+        return center.reshape(1, 3)
     ang = np.linspace(0.0, 2.0*np.pi, k, endpoint=False)
     return center + (h*np.cos(ang))[:,None]*u + (h*np.sin(ang))[:,None]*w
 
