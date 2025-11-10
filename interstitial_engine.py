@@ -282,7 +282,15 @@ def max_multiplicity_for_scale(
     radii = (alphas * scale_s * p.a).astype(float)
     rmax = float(np.max(radii))
 
-    pairs = _build_pairs_for_cutoff(centers, shifts, cutoff=2.0*rmax)
+    # Cutoff must be large enough to find neighboring atoms across periodic boundaries
+    # For a pair to intersect, we need: |r1 + r2| >= distance
+    # The nearest neighbor in a primitive lattice is at distance a (the lattice parameter)
+    # So cutoff must be at least: 2*rmax + a (to reach nearest neighbors)
+    a_vec, b_vec, c_vec = lattice_vectors(p)
+    a_mag = float(np.linalg.norm(a_vec))
+    cutoff = max(2.0*rmax + a_mag, 3.0*rmax)  # Ensure we capture neighbors
+
+    pairs = _build_pairs_for_cutoff(centers, shifts, cutoff=cutoff)
     if not pairs:
         return 0, np.empty((0,3)), np.empty((0,))
 
