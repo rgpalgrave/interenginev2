@@ -275,6 +275,30 @@ else:
 st.divider()
 st.subheader("⚙️ Calculation Parameters")
 
+# Preset selector
+preset_col1, preset_col2 = st.columns([2, 1])
+with preset_col1:
+    preset = st.selectbox(
+        "Parameter Preset",
+        ["Custom", "Quick Scan (Fast)", "Standard (Recommended)", "High Precision (Accurate)"],
+        help="Choose a preset or use Custom for manual tuning"
+    )
+
+# Apply preset
+preset_values = {
+    "Quick Scan (Fast)": {"k_samples": 8, "cluster_eps": 0.1},
+    "Standard (Recommended)": {"k_samples": 16, "cluster_eps": 0.1},
+    "High Precision (Accurate)": {"k_samples": 32, "cluster_eps": 0.01},
+}
+
+if preset in preset_values:
+    preset_vals = preset_values[preset]
+    preset_k = preset_vals["k_samples"]
+    preset_cluster = preset_vals["cluster_eps"]
+else:
+    preset_k = 24
+    preset_cluster = 0.1
+
 col_calc1, col_calc2, col_calc3 = st.columns(3)
 
 with col_calc1:
@@ -284,7 +308,7 @@ with col_calc1:
         max_value=2.0,
         value=0.35,
         step=0.01,
-        help="Multiplier for sphere radius: actual_radius = s × sphere_size × a"
+        help="Sphere radius = s × sphere_size × a"
     )
 
 with col_calc2:
@@ -301,10 +325,10 @@ with col_calc3:
     k_samples = st.number_input(
         "Sampling density (k)",
         min_value=4,
-        max_value=32,
-        value=24,
+        max_value=64,
+        value=preset_k,
         step=1,
-        help="Number of samples per pair circle (higher = better but slower)"
+        help="Points per sphere pair: higher = better resolution but slower"
     )
 
 col_calc4, col_calc5 = st.columns(2)
@@ -316,18 +340,48 @@ with col_calc4:
         max_value=0.1,
         value=0.01,
         step=0.001,
-        help="Tolerance for point-in-sphere tests"
+        help="Distance tolerance for point-in-sphere tests"
     )
 
 with col_calc5:
     cluster_eps_frac = st.number_input(
-        "Clustering tolerance (frac units)",
+        "Clustering tolerance (×a)",
         min_value=0.001,
-        max_value=0.1,
-        value=0.01,
+        max_value=0.2,
+        value=preset_cluster,
         step=0.001,
-        help="Distance threshold for clustering nearby intersections"
+        help="Merge intersections closer than this (tighter = more accurate but slower)"
     )
+
+# Show preset info
+if preset != "Custom":
+    st.info(
+        f"**{preset}** settings:\n"
+        f"• Speed: {'~50ms' if preset=='Quick Scan (Fast)' else '~200-500ms' if preset=='Standard (Recommended)' else '~1-2s'}\n"
+        f"• Accuracy: {'±0.01a' if preset=='Quick Scan (Fast)' else '±0.01a (±0.0001a with tight clustering)' if preset=='Standard (Recommended)' else '±0.0001a'}"
+    )
+
+# Parameter guide expander
+with st.expander("📖 Parameter Guide", expanded=False):
+    st.markdown("""
+    **Scale factor (s)**: Sphere radius = s × sphere_size × a
+    - Change to find different multiplicity levels
+    
+    **Sampling density (k)**: Points sampled per sphere intersection circle
+    - Higher values give better resolution but are slower
+    - k=8: Fast (~50ms), ±0.01a accuracy
+    - k=16: Standard (~200ms), ±0.01a accuracy  
+    - k=32: Accurate (~1s), ±0.0001a accuracy
+    - k=64: Maximum detail (~2s), ±0.0001a accuracy
+    
+    **Clustering tolerance (×a)**: Merges intersections closer than this distance
+    - Tighter values find more distinct sites (0.01a = ±0.0001a accuracy)
+    - Looser values merge similar sites (0.1a = faster, ±0.01a accuracy)
+    
+    **Recommended**: 
+    - Exploratory: k=8, cluster=0.1×a (fast)
+    - Production: k=16-24, cluster=0.01×a (accurate)
+    """)
 
 
 # =====================================================================
@@ -373,6 +427,7 @@ else:
                     target_N=target_N,
                     supercell_metals=(3, 3, 3),
                     k_samples=k_samples,
+                    cluster_eps_frac=cluster_eps_frac,
                     unit_cell_only=True
                 )
                 
