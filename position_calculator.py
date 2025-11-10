@@ -506,6 +506,7 @@ def calculate_complete_structure(
     target_N: Optional[int] = None,
     supercell_metals: Tuple[int, int, int] = (1, 1, 1),
     k_samples: int = 16,
+    cluster_eps_frac: float = 0.01,
     unit_cell_only: bool = True
 ) -> CompleteStructureData:
     """
@@ -518,6 +519,7 @@ def calculate_complete_structure(
         target_N: Optional target multiplicity for intersections
         supercell_metals: Supercell size for metal atoms (for visualization, unit cell only)
         k_samples: Sampling density for intersections
+        cluster_eps_frac: Clustering epsilon in fractional coordinates (default 0.01 for ±0.0001a accuracy)
         unit_cell_only: Return only intersections in unit cell
     
     Returns:
@@ -538,6 +540,7 @@ def calculate_complete_structure(
         scale_s=scale_s,
         target_N=target_N,
         k_samples=k_samples,
+        cluster_eps_frac=cluster_eps_frac,
         unit_cell_only=unit_cell_only
     )
     
