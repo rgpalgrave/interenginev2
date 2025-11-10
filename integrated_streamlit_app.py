@@ -223,9 +223,10 @@ with col_add5:
         "Sphere size (×a)",
         min_value=0.01,
         max_value=5.0,
-        value=0.35,
+        value=0.5,
         step=0.01,
-        key="new_sphere_size"
+        key="new_sphere_size",
+        help="Metal coordination sphere radius as fraction of lattice parameter"
     )
 
 with col_add6:
@@ -305,10 +306,10 @@ with col_calc1:
     scale_s = st.number_input(
         "Scale factor (s)",
         min_value=0.01,
-        max_value=2.0,
-        value=0.35,
+        max_value=3.0,
+        value=1.2,
         step=0.01,
-        help="Sphere radius = s × sphere_size × a"
+        help="Sphere radius = s × sphere_size × a. For primitive lattices, need s>1.0 for intersections"
     )
 
 with col_calc2:
@@ -361,26 +362,31 @@ if preset != "Custom":
         f"• Accuracy: {'±0.01a' if preset=='Quick Scan (Fast)' else '±0.01a (±0.0001a with tight clustering)' if preset=='Standard (Recommended)' else '±0.0001a'}"
     )
 
-# Parameter guide expander
 with st.expander("📖 Parameter Guide", expanded=False):
     st.markdown("""
-    **Scale factor (s)**: Sphere radius = s × sphere_size × a
-    - Change to find different multiplicity levels
+    **Scale factor (s)**: Multiplies sphere size to get actual radius
+    - Equation: actual_radius = s × sphere_size × a
+    - For primitive lattices, need s > 1.0 for intersections (neighbors are distance a apart)
+    - For FCC/BCC, can use smaller s due to closer neighbors
+    
+    **Sphere size (×a)**: Coordination sphere size as fraction of lattice parameter
+    - Typical range: 0.3-1.0
+    - Start with 0.5 for most systems
     
     **Sampling density (k)**: Points sampled per sphere intersection circle
     - Higher values give better resolution but are slower
     - k=8: Fast (~50ms), ±0.01a accuracy
     - k=16: Standard (~200ms), ±0.01a accuracy  
     - k=32: Accurate (~1s), ±0.0001a accuracy
-    - k=64: Maximum detail (~2s), ±0.0001a accuracy
     
     **Clustering tolerance (×a)**: Merges intersections closer than this distance
     - Tighter values find more distinct sites (0.01a = ±0.0001a accuracy)
     - Looser values merge similar sites (0.1a = faster, ±0.01a accuracy)
     
-    **Recommended**: 
-    - Exploratory: k=8, cluster=0.1×a (fast)
-    - Production: k=16-24, cluster=0.01×a (accurate)
+    **Example for primitive cubic:**
+    - Sphere size: 0.5×a
+    - Scale s: 1.2 (actual radius = 1.2 × 0.5 × a = 0.6a)
+    - This gives N=2 intersections along cube edges
     """)
 
 
