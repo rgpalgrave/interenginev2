@@ -371,7 +371,7 @@ else:
                     p=current_lattice,
                     scale_s=scale_s,
                     target_N=target_N,
-                    supercell_metals=(1, 1, 1),
+                    supercell_metals=(3, 3, 3),
                     k_samples=k_samples,
                     unit_cell_only=True
                 )
