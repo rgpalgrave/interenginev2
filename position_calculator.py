@@ -512,14 +512,55 @@ class ScanResult:
     parameter_values: np.ndarray  # Values scanned
     structures: List[CompleteStructureData]  # Structure at each value
     
+    def to_xyz(self, param_val: float, structure: CompleteStructureData) -> str:
+        """
+        Convert a structure to XYZ format with multiplicity and metal atoms info.
+        Format: element_symbol  x  y  z  [# multiplicity=N, contributing=[atom_indices]]
+        
+        Args:
+            param_val: Parameter value for this structure
+            structure: The structure to export
+        
+        Returns:
+            XYZ format string
+        """
+        lines = []
+        
+        # Count total atoms
+        n_metals = len(structure.metal_atoms.cartesian)
+        n_intersections = len(structure.intersections.cartesian)
+        total = n_metals + n_intersections
+        
+        lines.append(str(total))
+        lines.append(f"{self.parameter_name}={param_val:.6f} a={structure.lattice_params.a:.6f}")
+        
+        # Metal atoms - format: Sublattice_name  x  y  z
+        for i in range(n_metals):
+            cart = structure.metal_atoms.cartesian[i]
+            name = structure.metal_atoms.sublattice_name[i]
+            lines.append(f"{name}  {cart[0]:.6f}  {cart[1]:.6f}  {cart[2]:.6f}")
+        
+        # Intersections - format: X_multiplicity  x  y  z  # multiplicity=N, contributing=[indices]
+        for i in range(n_intersections):
+            cart = structure.intersections.cartesian[i]
+            mult = structure.intersections.multiplicity[i]
+            contrib = structure.intersections.contributing_atoms[i] if i < len(structure.intersections.contributing_atoms) else []
+            contrib_str = ",".join(map(str, contrib)) if contrib else ""
+            lines.append(f"X{mult}  {cart[0]:.6f}  {cart[1]:.6f}  {cart[2]:.6f}  # mult={mult}, metals=[{contrib_str}]")
+        
+        return "\n".join(lines)
+    
     def to_csv(self, filename: str):
-        """Export scan results to CSV files"""
+        """
+        Export scan results to CSV files (one per parameter value).
+        
+        Args:
+            filename: Base filename for output
+        """
         import csv
         
-        # One CSV per parameter value
-        for i, param_val in enumerate(self.parameter_values):
-            structure = self.structures[i]
-            
+        # One CSV pair per parameter value
+        for param_val, structure in zip(self.parameter_values, self.structures):
             # Metal atoms file
             metals_filename = f"{filename}_{self.parameter_name}_{param_val:.6f}_metals.csv"
             with open(metals_filename, 'w', newline='') as f:
@@ -538,15 +579,18 @@ class ScanResult:
             int_filename = f"{filename}_{self.parameter_name}_{param_val:.6f}_intersections.csv"
             with open(int_filename, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(['multiplicity', 'frac_x', 'frac_y', 'frac_z', 'cart_x', 'cart_y', 'cart_z'])
+                writer.writerow(['multiplicity', 'frac_x', 'frac_y', 'frac_z', 'cart_x', 'cart_y', 'cart_z', 'contributing_metals'])
                 for j in range(len(structure.intersections.fractional)):
                     frac = structure.intersections.fractional[j]
                     cart = structure.intersections.cartesian[j]
                     mult = structure.intersections.multiplicity[j]
+                    contrib = structure.intersections.contributing_atoms[j] if j < len(structure.intersections.contributing_atoms) else []
+                    contrib_str = ";".join(map(str, contrib)) if contrib else ""
                     writer.writerow([
                         mult,
                         f"{frac[0]:.3f}", f"{frac[1]:.3f}", f"{frac[2]:.3f}",
-                        f"{cart[0]:.6f}", f"{cart[1]:.6f}", f"{cart[2]:.6f}"
+                        f"{cart[0]:.6f}", f"{cart[1]:.6f}", f"{cart[2]:.6f}",
+                        contrib_str
                     ])
 
 
@@ -788,6 +832,7 @@ def scan_parameter(
     param_step: float,
     scale_s: float,
     target_N: int = 2,
+    min_multiplicity: int = 2,
     which_sublattice_idx: int = 0,
     k_samples: int = 16,
     cluster_eps_frac: float = 0.01
@@ -802,7 +847,8 @@ def scan_parameter(
         param_min, param_max: Range to scan
         param_step: Step size
         scale_s: Scale factor (if not scanning this)
-        target_N: Target multiplicity for intersections
+        target_N: Target multiplicity for intersections (deprecated, use min_multiplicity)
+        min_multiplicity: Minimum multiplicity to include in output
         which_sublattice_idx: Which sublattice to modify (for 'radius')
         k_samples: Sampling density
         cluster_eps_frac: Clustering tolerance
@@ -845,13 +891,45 @@ def scan_parameter(
                 sublattices=subs_scan,
                 p=p_scan,
                 scale_s=s_scan,
-                target_N=target_N,
+                target_N=min_multiplicity,
                 supercell_metals=(1, 1, 1),
                 k_samples=k_samples,
                 cluster_eps_frac=cluster_eps_frac,
                 unit_cell_only=True
             )
-            structures.append(structure)
+            
+            # Filter intersections by minimum multiplicity and unit cell
+            mask = (structure.intersections.multiplicity >= min_multiplicity) & \
+                   is_in_unit_cell(structure.intersections.fractional, tol=1e-6)
+            
+            filtered_intersections = IntersectionData(
+                fractional=structure.intersections.fractional[mask],
+                cartesian=structure.intersections.cartesian[mask],
+                multiplicity=structure.intersections.multiplicity[mask],
+                contributing_atoms=[structure.intersections.contributing_atoms[i] for i in range(len(mask)) if mask[i]]
+            )
+            
+            # Filter metals to unit cell
+            metal_mask = is_in_unit_cell(structure.metal_atoms.fractional, tol=1e-6)
+            filtered_metals = MetalAtomData(
+                fractional=structure.metal_atoms.fractional[metal_mask],
+                cartesian=structure.metal_atoms.cartesian[metal_mask],
+                sublattice_id=structure.metal_atoms.sublattice_id[metal_mask],
+                sublattice_name=[structure.metal_atoms.sublattice_name[i] for i in range(len(metal_mask)) if metal_mask[i]],
+                radius=structure.metal_atoms.radius[metal_mask],
+                alpha_ratio=structure.metal_atoms.alpha_ratio[metal_mask]
+            )
+            
+            # Create filtered structure
+            filtered_structure = CompleteStructureData(
+                metal_atoms=filtered_metals,
+                intersections=filtered_intersections,
+                lattice_params=p_scan,
+                scale_s=s_scan,
+                lattice_vectors=structure.lattice_vectors
+            )
+            
+            structures.append(filtered_structure)
         except Exception as e:
             print(f"Error at {parameter_name}={param_val}: {e}")
             # Return partial results
