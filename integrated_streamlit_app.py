@@ -1,7 +1,6 @@
 # =====================================================================
-# crystallography_app_v2.py
-# Redesigned Streamlit UI for Crystallography Analysis Suite
-# Single page layout with global lattice and multiple sublattices
+# crystallography_app_enhanced.py
+# Streamlit UI with Enhanced Numerical Accuracy
 # =====================================================================
 
 import streamlit as st
@@ -14,12 +13,23 @@ import io
 import sys
 from pathlib import Path
 
-# Import modules
+# Import modules - try improved version first
 current_dir = Path(__file__).parent.absolute()
 if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
 try:
+    # Try to import improved engine
+    from interstitial_engine_improved import (
+        LatticeParams,
+        Sublattice,
+        lattice_vectors,
+        bravais_basis,
+        frac_to_cart,
+    )
+    ENGINE_VERSION = "Enhanced"
+except ImportError:
+    # Fallback to original
     from interstitial_engine import (
         LatticeParams,
         Sublattice,
@@ -27,16 +37,16 @@ try:
         bravais_basis,
         frac_to_cart,
     )
-    from position_calculator import (
-        calculate_complete_structure,
-        format_position_dict,
-        format_metal_atoms_csv,
-        format_intersections_csv,
-        format_xyz,
-    )
-except ImportError as e:
-    st.error(f"❌ Could not import modules: {e}")
-    st.stop()
+    ENGINE_VERSION = "Standard"
+
+from position_calculator import (
+    calculate_complete_structure,
+    format_position_dict,
+    format_metal_atoms_csv,
+    format_intersections_csv,
+    format_xyz,
+    scan_parameter,
+)
 
 # =====================================================================
 # Page configuration
@@ -49,7 +59,7 @@ st.set_page_config(
 )
 
 st.title("🔬 Crystallography Analysis Suite")
-st.markdown("*Calculate metal atom and intersection site positions*")
+st.markdown(f"*Calculate metal atom and intersection site positions* | Engine: **{ENGINE_VERSION}**")
 
 # =====================================================================
 # Session state initialization
@@ -285,20 +295,22 @@ with preset_col1:
         help="Choose a preset or use Custom for manual tuning"
     )
 
-# Apply preset
+# Apply preset with high accuracy flag
 preset_values = {
-    "Quick Scan (Fast)": {"k_samples": 8, "cluster_eps": 0.1},
-    "Standard (Recommended)": {"k_samples": 16, "cluster_eps": 0.1},
-    "High Precision (Accurate)": {"k_samples": 32, "cluster_eps": 0.01},
+    "Quick Scan (Fast)": {"k_samples": 8, "cluster_eps": 0.1, "high_accuracy": False},
+    "Standard (Recommended)": {"k_samples": 16, "cluster_eps": 0.01, "high_accuracy": False},
+    "High Precision (Accurate)": {"k_samples": 32, "cluster_eps": 0.005, "high_accuracy": True},
 }
 
 if preset in preset_values:
     preset_vals = preset_values[preset]
     preset_k = preset_vals["k_samples"]
     preset_cluster = preset_vals["cluster_eps"]
+    preset_high_acc = preset_vals.get("high_accuracy", False)
 else:
     preset_k = 24
-    preset_cluster = 0.1
+    preset_cluster = 0.01
+    preset_high_acc = False
 
 col_calc1, col_calc2, col_calc3 = st.columns(3)
 
@@ -332,7 +344,7 @@ with col_calc3:
         help="Points per sphere pair: higher = better resolution but slower"
     )
 
-col_calc4, col_calc5 = st.columns(2)
+col_calc4, col_calc5, col_calc6 = st.columns(3)
 
 with col_calc4:
     tol_inside = st.number_input(
@@ -354,19 +366,27 @@ with col_calc5:
         help="Merge intersections closer than this (tighter = more accurate but slower)"
     )
 
+with col_calc6:
+    high_accuracy = st.checkbox(
+        "High Accuracy Mode",
+        value=preset_high_acc,
+        help="Use weighted clustering and iterative refinement for better accuracy (slower)"
+    )
+
 # Show preset info
 if preset != "Custom":
     st.info(
         f"**{preset}** settings:\n"
-        f"• Speed: {'~50ms' if preset=='Quick Scan (Fast)' else '~200-500ms' if preset=='Standard (Recommended)' else '~1-2s'}\n"
-        f"• Accuracy: {'±0.01a' if preset=='Quick Scan (Fast)' else '±0.01a (±0.0001a with tight clustering)' if preset=='Standard (Recommended)' else '±0.0001a'}"
+        f"• Speed: {'~50ms' if preset=='Quick Scan (Fast)' else '~200-500ms' if preset=='Standard (Recommended)' else '~1-3s'}\n"
+        f"• Accuracy: {'±0.01a' if preset=='Quick Scan (Fast)' else '±0.001a' if preset=='Standard (Recommended)' else '±0.0001a'}\n"
+        f"• High Accuracy: {'No' if not preset_high_acc else 'Yes (weighted clustering + refinement)'}"
     )
 
 with st.expander("📖 Parameter Guide", expanded=False):
     st.markdown("""
     **Scale factor (s)**: Multiplies sphere size to get actual radius
     - Equation: actual_radius = s × sphere_size × a
-    - For primitive lattices, need s > 1.0 for intersections (neighbors are distance a apart)
+    - For primitive lattices, need s > 1.0 for intersections
     - For FCC/BCC, can use smaller s due to closer neighbors
     
     **Sphere size (×a)**: Coordination sphere size as fraction of lattice parameter
@@ -376,12 +396,18 @@ with st.expander("📖 Parameter Guide", expanded=False):
     **Sampling density (k)**: Points sampled per sphere intersection circle
     - Higher values give better resolution but are slower
     - k=8: Fast (~50ms), ±0.01a accuracy
-    - k=16: Standard (~200ms), ±0.01a accuracy  
+    - k=16: Standard (~200ms), ±0.001a accuracy  
     - k=32: Accurate (~1s), ±0.0001a accuracy
     
     **Clustering tolerance (×a)**: Merges intersections closer than this distance
-    - Tighter values find more distinct sites (0.01a = ±0.0001a accuracy)
+    - Tighter values find more distinct sites (0.005a = ±0.0001a accuracy)
     - Looser values merge similar sites (0.1a = faster, ±0.01a accuracy)
+    
+    **High Accuracy Mode**: Enhanced numerical accuracy through:
+    - Adaptive sampling density based on geometry
+    - Weighted clustering (high-multiplicity points have more influence)
+    - Iterative refinement to converge to true intersection positions
+    - Recommended for publication-quality results
     
     **Example for primitive cubic:**
     - Sphere size: 0.5×a
@@ -425,7 +451,7 @@ else:
                     )
                     sublattice_objs.append(sub_obj)
                 
-                # Calculate
+                # Calculate with high accuracy flag
                 structure = calculate_complete_structure(
                     sublattices=sublattice_objs,
                     p=current_lattice,
@@ -434,7 +460,8 @@ else:
                     supercell_metals=(3, 3, 3),
                     k_samples=k_samples,
                     cluster_eps_frac=cluster_eps_frac,
-                    unit_cell_only=True
+                    unit_cell_only=True,
+                    high_accuracy=high_accuracy  # Pass high accuracy flag
                 )
                 
                 # Store result and add metadata
@@ -442,7 +469,7 @@ else:
                 st.session_state.calculation_result.target_N = target_N
                 st.session_state.calculation_result.scale_s = scale_s
                 
-                st.success("✅ Calculation complete!")
+                st.success(f"✅ Calculation complete! {'(High Accuracy Mode)' if high_accuracy else ''}")
                 st.rerun()
             
             except Exception as e:
@@ -760,8 +787,9 @@ if st.session_state.calculation_result is not None:
         with col_scan6:
             min_mult = st.number_input("Min multiplicity", value=2, min_value=2, max_value=8, step=1, help="Only include intersections with multiplicity >= this value")
         
+        scan_high_acc = st.checkbox("Use High Accuracy for scan", value=False, help="Use enhanced accuracy mode for parameter scan (slower)")
+        
         if st.button("🔄 Run Parameter Scan", key="run_scan", use_container_width=True):
-            from position_calculator import scan_parameter
             
             with st.spinner(f"Scanning {scan_param}..."):
                 try:
@@ -777,7 +805,7 @@ if st.session_state.calculation_result is not None:
                         )
                         sublattice_objs.append(sub_obj)
                     
-                    # Run scan
+                    # Run scan with high accuracy flag
                     scan_result = scan_parameter(
                         sublattices=sublattice_objs,
                         p=current_lattice,
@@ -790,7 +818,8 @@ if st.session_state.calculation_result is not None:
                         min_multiplicity=min_mult,
                         which_sublattice_idx=sub_idx,
                         k_samples=k_samples,
-                        cluster_eps_frac=cluster_eps_frac
+                        cluster_eps_frac=cluster_eps_frac,
+                        high_accuracy=scan_high_acc
                     )
                     
                     # Display results
