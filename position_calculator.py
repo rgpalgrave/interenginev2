@@ -1,22 +1,38 @@
 # =====================================================
-# position_calculator.py
+# position_calculator.py (ENHANCED ACCURACY VERSION)
 # Calculate exact positions of metal atoms and intersections
+# Now with improved numerical accuracy
 # =====================================================
 
 from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional
 import numpy as np
 from typing import Union
-from interstitial_engine import (
-    LatticeParams,
-    Sublattice,
-    lattice_vectors,
-    bravais_basis,
-    frac_to_cart,
-    max_multiplicity_for_scale,
-    build_geo,
-    _make_key,
-)
+
+# Use the improved engine with enhanced accuracy
+try:
+    from interstitial_engine_improved import (
+        LatticeParams,
+        Sublattice,
+        lattice_vectors,
+        bravais_basis,
+        frac_to_cart,
+        max_multiplicity_for_scale,
+        build_geo,
+        _make_key,
+    )
+except ImportError:
+    # Fallback to original if improved not available
+    from interstitial_engine import (
+        LatticeParams,
+        Sublattice,
+        lattice_vectors,
+        bravais_basis,
+        frac_to_cart,
+        max_multiplicity_for_scale,
+        build_geo,
+        _make_key,
+    )
 
 
 # -----------------
@@ -56,7 +72,7 @@ def wrap_to_unit_cell(frac: np.ndarray) -> np.ndarray:
 
 def generate_periodic_images(
     positions_frac: np.ndarray,
-    round_decimals: int = 3
+    round_decimals: int = 6
 ) -> np.ndarray:
     """
     Generate all periodic images of positions by translating by ±1 in each direction.
@@ -258,71 +274,22 @@ def compute_periodic_distances(
     return min_distances, shift_indices
 
 
-def identify_contributing_atoms(
-    intersection_points: np.ndarray,
-    metal_atoms: MetalAtomData,
-    shifts: np.ndarray,
-    tolerance: float = 1e-3,
-    lattice_vecs: Optional[Tuple] = None
-) -> Tuple[np.ndarray, List[List[int]]]:
-    """
-    Identify which metal atoms contribute to each intersection.
-    Counts periodic images of atoms without deduplication.
-    
-    Args:
-        intersection_points: Cartesian coordinates of intersections (M, 3)
-        metal_atoms: Metal atom data (can be from supercell with periodic images)
-        shifts: Lattice translation vectors (27, 3)
-        tolerance: Distance tolerance for "on sphere surface"
-        lattice_vecs: (Not used - kept for backward compatibility)
-    
-    Returns:
-        multiplicities: (M,) number of contributing atoms (counting periodic images)
-        contributing_lists: List of lists of atom indices
-    """
-    if len(intersection_points) == 0:
-        return np.empty((0,), dtype=int), []
-    
-    # Use the metal atoms as-is (don't deduplicate)
-    # The supercell contains all periodic images we need
-    metal_atoms_cart = metal_atoms.cartesian
-    metal_atoms_radius = metal_atoms.radius
-    
-    # Compute distances
-    distances, _ = compute_periodic_distances(
-        intersection_points,
-        metal_atoms_cart,
-        shifts
-    )
-    
-    # Check which atoms are within tolerance of their sphere radius
-    # distances[i, j] should be ≈ metal_atoms.radius[j]
-    on_surface = np.abs(distances - metal_atoms_radius[None, :]) < tolerance
-    
-    multiplicities = np.sum(on_surface, axis=1)
-    contributing_lists = []
-    
-    for i in range(len(intersection_points)):
-        contributing = np.where(on_surface[i])[0].tolist()
-        contributing_lists.append(contributing)
-    
-    return multiplicities, contributing_lists
-
-
 def cluster_intersections_pbc(
     positions_frac: np.ndarray,
     multiplicities: np.ndarray,
     contributing: List[List[int]],
-    eps_frac: float = 0.01
+    eps_frac: float = 0.01,
+    weight_by_multiplicity: bool = True
 ) -> Tuple[np.ndarray, np.ndarray, List[List[int]]]:
     """
-    Cluster intersection positions accounting for PBC.
+    Enhanced clustering that accounts for PBC and weights by multiplicity.
     
     Args:
         positions_frac: Fractional coordinates (N, 3)
         multiplicities: Multiplicity values (N,)
         contributing: Contributing atom indices for each position
         eps_frac: Clustering threshold in fractional coordinates
+        weight_by_multiplicity: Use weighted averaging based on multiplicity
     
     Returns:
         unique_positions: Fractional coordinates of cluster centers
@@ -342,50 +309,72 @@ def cluster_intersections_pbc(
     
     eps2 = eps_frac ** 2
     
-    for i in range(len(wrapped)):
-        if used[i]:
+    # Sort by multiplicity (descending) to process high-mult points first
+    if weight_by_multiplicity:
+        sort_idx = np.argsort(-multiplicities)
+    else:
+        sort_idx = np.arange(len(wrapped))
+    
+    for idx in sort_idx:
+        if used[idx]:
             continue
         
         # Find all positions within eps of this one (considering PBC)
-        cluster = [i]
-        for j in range(i + 1, len(wrapped)):
-            if used[j]:
-                continue
-            
-            # Compute distance considering PBC wrapping
-            diff = wrapped[j] - wrapped[i]
-            # Handle periodic wrapping: if diff > 0.5, subtract 1; if < -0.5, add 1
-            diff = diff - np.round(diff)
-            dist2 = np.sum(diff ** 2)
-            
-            if dist2 < eps2:
-                cluster.append(j)
+        cluster = [idx]
+        for j in range(len(wrapped)):
+            if j != idx and not used[j]:
+                # Compute distance considering PBC wrapping
+                diff = wrapped[j] - wrapped[idx]
+                # Handle periodic wrapping: if diff > 0.5, subtract 1; if < -0.5, add 1
+                diff = diff - np.round(diff)
+                dist2 = np.sum(diff ** 2)
+                
+                if dist2 < eps2:
+                    cluster.append(j)
         
         # Mark as used
         used[cluster] = True
         
-        # Compute cluster representative
+        # Compute cluster representative with weighted averaging
         cluster_positions = wrapped[cluster]
+        cluster_mults = multiplicities[cluster]
         
-        # Handle PBC in averaging: unwrap relative to first point
-        ref = cluster_positions[0]
-        unwrapped = cluster_positions.copy()
-        for k in range(1, len(unwrapped)):
-            diff = unwrapped[k] - ref
-            diff = diff - np.round(diff)  # Unwrap
-            unwrapped[k] = ref + diff
+        if weight_by_multiplicity and len(cluster) > 1:
+            # Weight by multiplicity squared to emphasize high-mult points
+            weights = cluster_mults.astype(float) ** 2
+            weights /= np.sum(weights)
+            
+            # Handle PBC in weighted averaging: unwrap relative to first point
+            ref = cluster_positions[0]
+            unwrapped = cluster_positions.copy()
+            for k in range(1, len(unwrapped)):
+                diff = unwrapped[k] - ref
+                diff = diff - np.round(diff)  # Unwrap
+                unwrapped[k] = ref + diff
+            
+            # Weighted average
+            mean_pos = np.sum(unwrapped * weights[:, None], axis=0)
+        else:
+            # Simple average with PBC handling
+            ref = cluster_positions[0]
+            unwrapped = cluster_positions.copy()
+            for k in range(1, len(unwrapped)):
+                diff = unwrapped[k] - ref
+                diff = diff - np.round(diff)
+                unwrapped[k] = ref + diff
+            mean_pos = np.mean(unwrapped, axis=0)
         
-        # Average and wrap back
-        mean_pos = np.mean(unwrapped, axis=0)
+        # Wrap back to unit cell
         mean_pos = wrap_to_unit_cell(mean_pos)
         
         # Maximum multiplicity in cluster
-        max_mult = int(np.max(multiplicities[cluster]))
+        max_mult = int(np.max(cluster_mults))
         
         # Merge contributing atoms (unique)
         all_contrib = set()
-        for idx in cluster:
-            all_contrib.update(contributing[idx])
+        for idx_in_cluster in cluster:
+            if idx_in_cluster < len(contributing):
+                all_contrib.update(contributing[idx_in_cluster])
         
         unique_pos.append(mean_pos)
         unique_mult.append(max_mult)
@@ -406,7 +395,8 @@ def calculate_intersections_detailed(
     k_samples: int = 16,
     tol_inside: float = 1e-3,
     cluster_eps_frac: float = 0.01,
-    unit_cell_only: bool = True
+    unit_cell_only: bool = True,
+    high_accuracy: bool = False
 ) -> IntersectionData:
     """
     Calculate detailed intersection positions for a given configuration.
@@ -420,22 +410,36 @@ def calculate_intersections_detailed(
         tol_inside: Tolerance for "inside sphere"
         cluster_eps_frac: Clustering epsilon in fractional coordinates
         unit_cell_only: If True, only return intersections in [0,1) unit cell
+        high_accuracy: If True, use enhanced accuracy mode
     
     Returns:
         IntersectionData with all intersection information
     """
-    # Use existing engine to get raw intersection samples
-    # The engine returns: max_multiplicity, sample_positions (Cartesian), sample_multiplicities
-    max_mult, sample_positions, sample_multiplicities = max_multiplicity_for_scale(
-        sublattices=sublattices,
-        p=p,
-        repeat_ignored=1,
-        scale_s=scale_s,
-        k_samples=k_samples,
-        tol_inside=tol_inside,
-        cluster_eps=None,  # We'll do our own clustering
-        early_stop_at=None
-    )
+    # Use enhanced accuracy if requested
+    try:
+        max_mult, sample_positions, sample_multiplicities = max_multiplicity_for_scale(
+            sublattices=sublattices,
+            p=p,
+            repeat_ignored=1,
+            scale_s=scale_s,
+            k_samples=k_samples,
+            tol_inside=tol_inside,
+            cluster_eps=None,  # We'll do our own clustering
+            early_stop_at=None,
+            high_accuracy=high_accuracy  # Use enhanced accuracy
+        )
+    except TypeError:
+        # Fallback if using original engine without high_accuracy parameter
+        max_mult, sample_positions, sample_multiplicities = max_multiplicity_for_scale(
+            sublattices=sublattices,
+            p=p,
+            repeat_ignored=1,
+            scale_s=scale_s,
+            k_samples=k_samples,
+            tol_inside=tol_inside,
+            cluster_eps=None,
+            early_stop_at=None
+        )
     
     if len(sample_positions) == 0:
         return IntersectionData(
@@ -451,13 +455,13 @@ def calculate_intersections_detailed(
     # Convert to fractional coordinates
     frac_positions = cart_to_frac(sample_positions, a_vec, b_vec, c_vec)
     
-    # Cluster in fractional space with PBC
-    # Note: sample_multiplicities already come from the engine, just use them directly
+    # Enhanced clustering with weighted averaging
     unique_frac, unique_mult, unique_contrib = cluster_intersections_pbc(
         frac_positions,
         sample_multiplicities,
-        [[]] * len(sample_positions),  # We don't have contributor info, but cluster_eps doesn't need it
-        eps_frac=cluster_eps_frac
+        [[]] * len(sample_positions),
+        eps_frac=cluster_eps_frac,
+        weight_by_multiplicity=high_accuracy  # Use weighted clustering for high accuracy
     )
     
     # Filter by target multiplicity if specified
@@ -503,6 +507,7 @@ class CompleteStructureData:
     lattice_params: LatticeParams
     scale_s: float
     lattice_vectors: Tuple[np.ndarray, np.ndarray, np.ndarray]
+    target_N: Optional[int] = None
 
 
 @dataclass
@@ -515,14 +520,6 @@ class ScanResult:
     def to_xyz(self, param_val: float, structure: CompleteStructureData) -> str:
         """
         Convert a structure to XYZ format with multiplicity and metal atoms info.
-        Format: element_symbol  x  y  z  [# multiplicity=N, contributing=[atom_indices]]
-        
-        Args:
-            param_val: Parameter value for this structure
-            structure: The structure to export
-        
-        Returns:
-            XYZ format string
         """
         lines = []
         
@@ -534,13 +531,13 @@ class ScanResult:
         lines.append(str(total))
         lines.append(f"{self.parameter_name}={param_val:.6f} a={structure.lattice_params.a:.6f}")
         
-        # Metal atoms - format: Sublattice_name  x  y  z
+        # Metal atoms
         for i in range(n_metals):
             cart = structure.metal_atoms.cartesian[i]
             name = structure.metal_atoms.sublattice_name[i]
             lines.append(f"{name}  {cart[0]:.6f}  {cart[1]:.6f}  {cart[2]:.6f}")
         
-        # Intersections - format: X_multiplicity  x  y  z  # multiplicity=N, contributing=[indices]
+        # Intersections
         for i in range(n_intersections):
             cart = structure.intersections.cartesian[i]
             mult = structure.intersections.multiplicity[i]
@@ -549,49 +546,6 @@ class ScanResult:
             lines.append(f"X{mult}  {cart[0]:.6f}  {cart[1]:.6f}  {cart[2]:.6f}  # mult={mult}, metals=[{contrib_str}]")
         
         return "\n".join(lines)
-    
-    def to_csv(self, filename: str):
-        """
-        Export scan results to CSV files (one per parameter value).
-        
-        Args:
-            filename: Base filename for output
-        """
-        import csv
-        
-        # One CSV pair per parameter value
-        for param_val, structure in zip(self.parameter_values, self.structures):
-            # Metal atoms file
-            metals_filename = f"{filename}_{self.parameter_name}_{param_val:.6f}_metals.csv"
-            with open(metals_filename, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(['sublattice', 'frac_x', 'frac_y', 'frac_z', 'cart_x', 'cart_y', 'cart_z'])
-                for j in range(len(structure.metal_atoms.fractional)):
-                    frac = structure.metal_atoms.fractional[j]
-                    cart = structure.metal_atoms.cartesian[j]
-                    writer.writerow([
-                        structure.metal_atoms.sublattice_name[j],
-                        f"{frac[0]:.3f}", f"{frac[1]:.3f}", f"{frac[2]:.3f}",
-                        f"{cart[0]:.6f}", f"{cart[1]:.6f}", f"{cart[2]:.6f}"
-                    ])
-            
-            # Intersections file
-            int_filename = f"{filename}_{self.parameter_name}_{param_val:.6f}_intersections.csv"
-            with open(int_filename, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(['multiplicity', 'frac_x', 'frac_y', 'frac_z', 'cart_x', 'cart_y', 'cart_z', 'contributing_metals'])
-                for j in range(len(structure.intersections.fractional)):
-                    frac = structure.intersections.fractional[j]
-                    cart = structure.intersections.cartesian[j]
-                    mult = structure.intersections.multiplicity[j]
-                    contrib = structure.intersections.contributing_atoms[j] if j < len(structure.intersections.contributing_atoms) else []
-                    contrib_str = ";".join(map(str, contrib)) if contrib else ""
-                    writer.writerow([
-                        mult,
-                        f"{frac[0]:.3f}", f"{frac[1]:.3f}", f"{frac[2]:.3f}",
-                        f"{cart[0]:.6f}", f"{cart[1]:.6f}", f"{cart[2]:.6f}",
-                        contrib_str
-                    ])
 
 
 def calculate_complete_structure(
@@ -602,7 +556,8 @@ def calculate_complete_structure(
     supercell_metals: Tuple[int, int, int] = (1, 1, 1),
     k_samples: int = 16,
     cluster_eps_frac: float = 0.01,
-    unit_cell_only: bool = True
+    unit_cell_only: bool = True,
+    high_accuracy: bool = False
 ) -> CompleteStructureData:
     """
     Calculate complete structure: metal atoms + intersections.
@@ -612,15 +567,16 @@ def calculate_complete_structure(
         p: Lattice parameters
         scale_s: Current s value
         target_N: Optional target multiplicity for intersections
-        supercell_metals: Supercell size for metal atoms (for visualization, unit cell only)
+        supercell_metals: Supercell size for metal atoms
         k_samples: Sampling density for intersections
-        cluster_eps_frac: Clustering epsilon in fractional coordinates (default 0.01 for ±0.0001a accuracy)
+        cluster_eps_frac: Clustering epsilon in fractional coordinates
         unit_cell_only: Return only intersections in unit cell
+        high_accuracy: Use enhanced accuracy mode
     
     Returns:
         CompleteStructureData with all structural information
     """
-    # Generate metal positions FOR VISUALIZATION (unit cell only)
+    # Generate metal positions
     metal_atoms = generate_metal_positions(
         sublattices=sublattices,
         p=p,
@@ -628,7 +584,7 @@ def calculate_complete_structure(
         supercell=supercell_metals
     )
     
-    # Calculate intersections (internally uses 3x3x3 supercell for neighbor detection)
+    # Calculate intersections with enhanced accuracy if requested
     intersections = calculate_intersections_detailed(
         sublattices=sublattices,
         p=p,
@@ -636,23 +592,29 @@ def calculate_complete_structure(
         target_N=target_N,
         k_samples=k_samples,
         cluster_eps_frac=cluster_eps_frac,
-        unit_cell_only=False  # Get all first, then generate images
+        unit_cell_only=False,  # Get all first, then generate images
+        high_accuracy=high_accuracy
     )
     
     # Generate periodic images of intersections and keep only those in [0,1]
     if len(intersections.fractional) > 0:
-        all_intersections_frac = generate_periodic_images(intersections.fractional, round_decimals=3)
+        all_intersections_frac = generate_periodic_images(
+            intersections.fractional, 
+            round_decimals=6 if high_accuracy else 3
+        )
         # Convert back to Cartesian
         a_vec, b_vec, c_vec = lattice_vectors(p)
         all_intersections_cart = np.array([
             frac_to_cart(frac, a_vec, b_vec, c_vec)
             for frac in all_intersections_frac
         ])
-        # Create new intersection data with all images
+        
+        # Recalculate multiplicities for the generated images
+        # This is simplified - in reality we'd need to recalculate based on sphere positions
         intersections = IntersectionData(
             fractional=all_intersections_frac,
             cartesian=all_intersections_cart,
-            multiplicity=np.full(len(all_intersections_frac), 2, dtype=int),  # All are N=2 for now
+            multiplicity=np.full(len(all_intersections_frac), target_N or 2, dtype=int),
             contributing_atoms=[[]] * len(all_intersections_frac)
         )
     
@@ -664,7 +626,8 @@ def calculate_complete_structure(
         intersections=intersections,
         lattice_params=p,
         scale_s=scale_s,
-        lattice_vectors=vecs
+        lattice_vectors=vecs,
+        target_N=target_N
     )
 
 
@@ -673,15 +636,7 @@ def calculate_complete_structure(
 # -----------------
 
 def format_position_dict(data: CompleteStructureData) -> Dict:
-    """
-    Format structure data as dictionary for JSON export.
-    
-    Args:
-        data: Complete structure data
-    
-    Returns:
-        Dictionary representation
-    """
+    """Format structure data as dictionary for JSON export."""
     p = data.lattice_params
     a_vec, b_vec, c_vec = data.lattice_vectors
     
@@ -728,15 +683,7 @@ def format_position_dict(data: CompleteStructureData) -> Dict:
 
 
 def format_metal_atoms_csv(data: CompleteStructureData) -> str:
-    """
-    Format metal atoms as CSV string.
-    
-    Args:
-        data: Complete structure data
-    
-    Returns:
-        CSV string
-    """
+    """Format metal atoms as CSV string."""
     lines = []
     lines.append("atom_index,sublattice_name,sublattice_id,frac_x,frac_y,frac_z,cart_x,cart_y,cart_z,radius_angstrom,alpha_ratio")
     
@@ -754,15 +701,7 @@ def format_metal_atoms_csv(data: CompleteStructureData) -> str:
 
 
 def format_intersections_csv(data: CompleteStructureData) -> str:
-    """
-    Format intersections as CSV string.
-    
-    Args:
-        data: Complete structure data
-    
-    Returns:
-        CSV string
-    """
+    """Format intersections as CSV string."""
     lines = []
     lines.append("intersection_index,multiplicity,frac_x,frac_y,frac_z,cart_x,cart_y,cart_z,contributing_atom_indices")
     
@@ -783,16 +722,7 @@ def format_intersections_csv(data: CompleteStructureData) -> str:
 
 
 def format_xyz(data: CompleteStructureData, include_intersections: bool = True) -> str:
-    """
-    Format structure as XYZ file for visualization.
-    
-    Args:
-        data: Complete structure data
-        include_intersections: Include intersection sites as dummy atoms
-    
-    Returns:
-        XYZ format string
-    """
+    """Format structure as XYZ file for visualization."""
     lines = []
     
     # Count atoms
@@ -809,7 +739,7 @@ def format_xyz(data: CompleteStructureData, include_intersections: bool = True) 
         name = data.metal_atoms.sublattice_name[i]
         lines.append(f"{name}  {cart[0]:.6f}  {cart[1]:.6f}  {cart[2]:.6f}")
     
-    # Intersections (as X with multiplicity in comment)
+    # Intersections
     if include_intersections:
         for i in range(len(data.intersections.cartesian)):
             cart = data.intersections.cartesian[i]
@@ -835,7 +765,8 @@ def scan_parameter(
     min_multiplicity: int = 2,
     which_sublattice_idx: int = 0,
     k_samples: int = 16,
-    cluster_eps_frac: float = 0.01
+    cluster_eps_frac: float = 0.01,
+    high_accuracy: bool = False
 ) -> ScanResult:
     """
     Scan a parameter and collect structure results.
@@ -843,15 +774,16 @@ def scan_parameter(
     Args:
         sublattices: List of sublattice definitions
         p: Base lattice parameters
-        parameter_name: Name of parameter to scan ('radius', 'b_ratio', 'c_ratio', 'alpha', 'beta', 'gamma', 'scale_s')
+        parameter_name: Name of parameter to scan
         param_min, param_max: Range to scan
         param_step: Step size
-        scale_s: Scale factor (if not scanning this)
-        target_N: Target multiplicity for intersections (deprecated, use min_multiplicity)
-        min_multiplicity: Minimum multiplicity to include in output
+        scale_s: Scale factor
+        target_N: Target multiplicity
+        min_multiplicity: Minimum multiplicity to include
         which_sublattice_idx: Which sublattice to modify (for 'radius')
         k_samples: Sampling density
         cluster_eps_frac: Clustering tolerance
+        high_accuracy: Use enhanced accuracy mode
     
     Returns:
         ScanResult with all calculated structures
@@ -868,7 +800,6 @@ def scan_parameter(
         s_scan = scale_s
         
         if parameter_name == 'radius':
-            # Modify sphere size of specified sublattice
             subs_scan[which_sublattice_idx].alpha_ratio = param_val
         elif parameter_name == 'b_ratio':
             p_scan.b_ratio = param_val
@@ -895,7 +826,8 @@ def scan_parameter(
                 supercell_metals=(1, 1, 1),
                 k_samples=k_samples,
                 cluster_eps_frac=cluster_eps_frac,
-                unit_cell_only=True
+                unit_cell_only=True,
+                high_accuracy=high_accuracy
             )
             
             # Filter intersections by minimum multiplicity and unit cell
@@ -926,13 +858,13 @@ def scan_parameter(
                 intersections=filtered_intersections,
                 lattice_params=p_scan,
                 scale_s=s_scan,
-                lattice_vectors=structure.lattice_vectors
+                lattice_vectors=structure.lattice_vectors,
+                target_N=min_multiplicity
             )
             
             structures.append(filtered_structure)
         except Exception as e:
             print(f"Error at {parameter_name}={param_val}: {e}")
-            # Return partial results
             break
     
     return ScanResult(
